@@ -1,109 +1,70 @@
+#[macro_use]
 extern crate schemamama;
-extern crate postgres;
 
-use schemamama::{Migration, Migrator};
+use schemamama::{Adapter, Migration, Migrator, Version};
+use std::cell::RefCell;
 
-use postgres::{Connection, SslMode};
-
-fn make_database_connection() -> Connection {
-    let connection = Connection::connect("postgres://postgres@localhost", &SslMode::None).unwrap();
-    connection.execute("SET search_path TO pg_temp;", &[]).unwrap();
-    connection
+struct DummyAdapter {
+    versions: RefCell<Vec<Version>>
 }
 
-fn current_schema_name(connection: &Connection) -> String {
-    connection.prepare("SELECT CURRENT_SCHEMA();").unwrap().query(&[]).unwrap().iter().next().
-        map(|r| r.get(0)).unwrap()
-}
-
-#[test]
-fn test_registration() {
-    let connection = make_database_connection();
-    let mut migrator = Migrator::new(&connection);
-
-    assert_eq!(migrator.earliest_registered_version(), None);
-    assert_eq!(migrator.latest_registered_version(), None);
-
-    migrator.register(Box::new(ThirdMigration));
-    migrator.register(Box::new(SecondMigration));
-
-    assert_eq!(migrator.earliest_registered_version(), Some(2));
-    assert_eq!(migrator.latest_registered_version(), Some(3));
-
-    migrator.register(Box::new(FirstMigration));
-
-    assert_eq!(migrator.earliest_registered_version(), Some(1));
-}
-
-#[test]
-fn test_setup() {
-    let connection = make_database_connection();
-    let schema_name = current_schema_name(&connection);
-    let migrator = Migrator::new(&connection);
-    let query = "SELECT * FROM pg_catalog.pg_tables WHERE schemaname = $1 AND \
-                 tablename = 'schemamama';";
-
-    for _ in 0..2 {
-        migrator.setup_schema();
-        assert_eq!(connection.execute(query, &[&schema_name]).unwrap(), 1);
+impl DummyAdapter {
+    pub fn new() -> DummyAdapter {
+        DummyAdapter { versions: RefCell::new(Vec::new()) }
     }
 }
 
-#[test]
-fn test_migration_count() {
-    let connection = make_database_connection();
-    let mut migrator = Migrator::new(&connection);
-    migrator.register(Box::new(FirstMigration));
-    migrator.register(Box::new(SecondMigration));
-    migrator.register(Box::new(ThirdMigration));
+impl Adapter for DummyAdapter {
+    type MigrationType = Migration;
 
-    migrator.setup_schema();
-    migrator.up(std::i64::MAX);
-    assert_eq!(migrator.latest_schema_version(), Some(3));
+    fn current_version(&self) -> Option<Version> {
+        self.versions.borrow_mut().iter().last().map(|v| *v)
+    }
 
-    migrator.down(2);
-    assert_eq!(migrator.latest_schema_version(), Some(2));
-}
+    fn apply_migration(&self, migration: &Migration) {
+        self.versions.borrow_mut().push(migration.version());
+    }
 
-#[test]
-fn test_migration_up_and_down() {
-    let connection = make_database_connection();
-    let schema_name = current_schema_name(&connection);
-    let mut migrator = Migrator::new(&connection);
-    migrator.register(Box::new(FirstMigration));
-
-    migrator.setup_schema();
-    migrator.up(1);
-    let query = "SELECT * FROM pg_catalog.pg_tables WHERE schemaname = $1 AND \
-                 tablename = 'first';";
-    assert_eq!(connection.execute(query, &[&schema_name]).unwrap(), 1);
-
-    migrator.down(0);
-    assert_eq!(connection.execute(query, &[&schema_name]).unwrap(), 0);
+    fn revert_migration(&self, migration: &Migration) {
+        let mut versions = self.versions.borrow_mut();
+        versions.iter().position(|&v| v == migration.version()).map(|i| versions.remove(i));
+    }
 }
 
 struct FirstMigration;
-
-impl Migration for FirstMigration {
-    fn version(&self) -> i64 { 1 }
-
-    fn up(&self, transaction: &postgres::Transaction) {
-        transaction.execute("CREATE TABLE first (id BIGINT PRIMARY KEY);", &[]).unwrap();
-    }
-
-    fn down(&self, transaction: &postgres::Transaction) {
-        transaction.execute("DROP TABLE first;", &[]).unwrap();
-    }
-}
-
+migration!(FirstMigration, 10, "first migration");
 struct SecondMigration;
+migration!(SecondMigration, 20, "second migration");
 
-impl Migration for SecondMigration {
-    fn version(&self) -> i64 { 2 }
+#[test]
+fn test_registration() {
+    let mut migrator = Migrator::new(DummyAdapter::new());
+    assert_eq!(migrator.first_version(), None);
+    assert_eq!(migrator.last_version(), None);
+    migrator.register(Box::new(SecondMigration));
+    migrator.register(Box::new(FirstMigration));
+    assert_eq!(migrator.first_version(), Some(10));
+    assert_eq!(migrator.last_version(), Some(20));
 }
 
-struct ThirdMigration;
+#[test]
+fn test_has_version() {
+    let mut migrator = Migrator::new(DummyAdapter::new());
+    assert_eq!(migrator.has_version(10), false);
+    migrator.register(Box::new(FirstMigration));
+    assert_eq!(migrator.has_version(10), true);
+}
 
-impl Migration for ThirdMigration {
-    fn version(&self) -> i64 { 3 }
+#[test]
+fn test_migrate() {
+    let mut migrator = Migrator::new(DummyAdapter::new());
+    migrator.register(Box::new(FirstMigration));
+    migrator.register(Box::new(SecondMigration));
+    assert_eq!(migrator.current_version(), None);
+    migrator.up(20);
+    assert_eq!(migrator.current_version(), Some(20));
+    migrator.down(Some(10));
+    assert_eq!(migrator.current_version(), Some(10));
+    migrator.down(None);
+    assert_eq!(migrator.current_version(), None);
 }

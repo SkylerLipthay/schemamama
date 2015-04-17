@@ -1,135 +1,154 @@
 #![feature(collections)]
 
-extern crate postgres;
+#[macro_use]
+extern crate log;
 
-use std::collections::{Bound, BTreeMap};
+use std::collections::{BTreeMap, Bound};
 
+/// The version type alias used to uniquely reference migrations.
+pub type Version = i64;
+
+/// All migrations will implement this trait, and a migration trait specific to the chosen adapter.
+/// This trait defines the metadata for tracking migration sequence and for human reference.
 pub trait Migration {
-    /// An ordered, unique identifier for this migration. Registered migrations will be run in
-    /// ascending order by version.
-    fn version(&self) -> i64;
+    /// An ordered (but not necessarily sequential), unique identifier for this migration.
+    /// Registered migrations will be applied in ascending order by version.
+    fn version(&self) -> Version;
 
-    /// Called when this migration is to be executed. This function has an empty body by default,
-    /// so its implementation is optional.
-    fn up(&self, _transaction: &postgres::Transaction) { }
-
-    /// Called when this migration is to be reversed. This function has an empty body by default,
-    /// so its implementation is optional.
-    fn down(&self, _transaction: &postgres::Transaction) { }
+    /// A message describing the effects of this migration.
+    fn description(&self) -> &'static str;
 }
 
-pub struct Migrator<'a> {
-    connection: &'a postgres::Connection,
-    migrations: BTreeMap<i64, Box<Migration>>
-}
-
-impl<'a> Migrator<'a> {
-    /// Create a new migrator tied to a PostgreSQL connection.
-    pub fn new(connection: &'a postgres::Connection) -> Migrator {
-        Migrator {
-            connection: connection,
-            migrations: BTreeMap::new()
+/// Efficiently implement the `Migration` trait for a given type.
+///
+/// ## Example
+///
+/// ```rust
+/// # #[macro_use]
+/// # extern crate schemamama;
+/// struct MyMigration;
+/// migration!(MyMigration, 100, "create some lovely database tables");
+///
+/// # fn main() {
+/// use schemamama::Migration;
+/// let m = MyMigration;
+/// assert_eq!(m.version(), 100);
+/// assert_eq!(m.description(), "create some lovely database tables");
+/// # }
+/// ```
+#[macro_export]
+macro_rules! migration {
+    ($ty:ident, $version:expr, $description:expr) => {
+        impl $crate::Migration for $ty {
+            fn version(&self) -> $crate::Version { $version }
+            fn description(&self) -> &'static str { $description }
         }
     }
+}
 
-    /// Register a bidirectional migration.
-    ///
-    /// ## Panics
-    ///
-    /// Panics if a migration with the same version has already been registered.
-    pub fn register(&mut self, migration: Box<Migration>) {
+/// Use this trait to connect the migrator to your chosen database technology.
+pub trait Adapter {
+    /// An alias to a specific trait that extends `Migration`. Typically, the aforementioned trait
+    /// will declare functions that the adapter will use to migrate upwards and downwards.
+    type MigrationType: Migration + ?Sized;
+
+    /// Returns the latest migration version, or `None` if no migrations have been recorded. Can
+    /// panic if necessary.
+    fn current_version(&self) -> Option<Version>;
+
+    /// Applies the specified migration. Can panic if necessary.
+    fn apply_migration(&self, migration: &Self::MigrationType);
+
+    /// Reverts the specified migration. Can panic if necessary.
+    fn revert_migration(&self, migration: &Self::MigrationType);
+}
+
+/// Maintains an ordered collection of migrations to utilize.
+pub struct Migrator<T: Adapter> {
+    adapter: T,
+    migrations: BTreeMap<Version, Box<T::MigrationType>>
+}
+
+impl<T: Adapter> Migrator<T> {
+    /// Create a migrator with a given adapter.
+    pub fn new(adapter: T) -> Migrator<T> {
+        Migrator { adapter: adapter, migrations: BTreeMap::new() }
+    }
+
+    /// Register a migration. If a migration with the same version is already registered, a warning
+    /// is logged and the registration fails.
+    pub fn register(&mut self, migration: Box<T::MigrationType>) {
         let version = migration.version();
-        if self.migrations.contains_key(&version) {
-            panic!("migration with version {} is already registered", version);
+        if self.has_version(version) {
+            warn!("Migration with version {:?} is already registered", version);
+        } else {
+            self.migrations.insert(version, migration);
         }
-        self.migrations.insert(version, migration);
     }
 
-    /// Reverse the schema to how it was before the most recent registered migration was run.
-    ///
-    /// ## Panics
-    ///
-    /// Panics if any registered migrations panic during downwards migration. Panics if the
-    /// Schemamama tables do not exist (call `setup_schema` prior to this).
-    pub fn down(&self, to: i64) {
-        let latest_version = self.latest_schema_version();
-        let current = match latest_version {
-            Some(ref version) => Bound::Included(version),
-            None => return
-        };
-        let destination = Bound::Excluded(&to);
-        let transaction = self.connection.transaction().unwrap();
-        for (_, ref migration) in self.migrations.range(destination, current).rev() {
-            migration.down(&transaction);
-            self.delete_schema_version(migration.version());
-        }
-        transaction.commit().unwrap();
+    /// Returns true is a migration with the provided version has been registered.
+    pub fn has_version(&self, version: Version) -> bool {
+        self.migrations.contains_key(&version)
     }
 
-    /// Migrate the schema to the most recent registered migration.
-    ///
-    /// ## Panics
-    ///
-    /// Panics if any registered migrations panic during upwards migration. Panics if the
-    /// Schemamama tables do not exist (call `setup_schema` prior to this).
-    pub fn up(&self, to: i64) {
-        let latest_version = self.latest_schema_version();
-        let current = match latest_version {
-            Some(ref version) => Bound::Excluded(version),
-            None => Bound::Unbounded
-        };
-        let destination = Bound::Included(&to);
-        let transaction = self.connection.transaction().unwrap();
-        for (_, ref migration) in self.migrations.range(current, destination) {
-            migration.up(&transaction);
-            self.record_schema_version(migration.version());
-        }
-        transaction.commit().unwrap();
+    /// Returns the lowest version of the registered migrations, or `None` if no migrations have
+    /// been registered.
+    pub fn first_version(&self) -> Option<Version> {
+        self.migrations.keys().next().map(|v| *v)
     }
 
-    /// Create the tables Schemamama requires to keep track of schema state. If the tables already
-    /// exist, this function has no operation.
-    ///
-    /// ## Panics
-    ///
-    /// Panics if the connection fails to create, read, or update Schemamama-specific tables.
-    pub fn setup_schema(&self) {
-        let query = "CREATE TABLE IF NOT EXISTS schemamama (version BIGINT PRIMARY KEY);";
-        self.connection.execute(query, &[]).unwrap();
+    /// Returns the highest version of the registered migrations, or `None` if no migrations have
+    /// been registered.
+    pub fn last_version(&self) -> Option<Version> {
+        self.migrations.keys().last().map(|v| *v)
     }
 
     /// Returns the latest migration version, or `None` if no migrations have been recorded.
     ///
     /// ## Panics
     ///
-    /// Panics if the Schemamama tables do not exist (call `setup_schema` prior to this).
-    pub fn latest_schema_version(&self) -> Option<i64> {
-        let query = "SELECT version FROM schemamama ORDER BY version DESC LIMIT 1;";
-        let statement = self.connection.prepare(query).unwrap();
-        statement.query(&[]).unwrap().iter().next().map(|r| r.get(0))
+    /// Panics if there is an underlying problem retrieving the current version from the adapter.
+    pub fn current_version(&self) -> Option<Version> {
+        self.adapter.current_version()
     }
 
-    /// Returns the lowest version of the registered migrations, or `None` if no migrations have
-    /// been registered.
-    pub fn earliest_registered_version(&self) -> Option<i64> {
-        self.migrations.keys().next().map(|v| *v)
+    /// Rollback to the specified version (exclusive), or rollback to the state before any
+    /// registered migrations were applied if `None` is specified.
+    ///
+    /// ## Panics
+    ///
+    /// Panics if there is an underlying problem reverting any of the matched migrations.
+    pub fn down(&self, to: Option<Version>) {
+        let current_version = self.current_version();
+        let source = match current_version {
+            Some(ref version) => Bound::Included(version),
+            None => return
+        };
+        let destination = match to {
+            Some(ref version) => Bound::Excluded(version),
+            None => Bound::Unbounded
+        };
+        for (version, migration) in self.migrations.range(destination, source).rev() {
+            info!("Reverting migration {:?}: {}", version, migration.description());
+            self.adapter.revert_migration(migration);
+        }
     }
 
-    /// Returns the highest version of the registered migrations, or `None` if no migrations have
-    /// been registered.
-    pub fn latest_registered_version(&self) -> Option<i64> {
-        self.migrations.keys().rev().next().map(|v| *v)
-    }
-
-    // Panics if the Schemamama tables do not exist (call `setup_schema` prior to this).
-    fn delete_schema_version(&self, version: i64) {
-        let query = "DELETE FROM schemamama WHERE version = $1;";
-        self.connection.execute(query, &[&version]).unwrap();
-    }
-
-    // Panics if the Schemamama tables do not exist (call `setup_schema` prior to this).
-    fn record_schema_version(&self, version: i64) {
-        let query = "INSERT INTO schemamama (version) VALUES ($1);";
-        self.connection.execute(query, &[&version]).unwrap();
+    /// Migrate to the specified version (inclusive).
+    ///
+    /// ## Panics
+    ///
+    /// Panics if there is an underlying problem applying any of the matched migrations.
+    pub fn up(&self, to: Version) {
+        let current_version = self.current_version();
+        let source = match current_version {
+            Some(ref version) => Bound::Excluded(version),
+            None => Bound::Unbounded
+        };
+        let destination = Bound::Included(&to);
+        for (version, migration) in self.migrations.range(source, destination) {
+            info!("Applying migration {:?}: {}", version, migration.description());
+            self.adapter.apply_migration(migration);
+        }
     }
 }
