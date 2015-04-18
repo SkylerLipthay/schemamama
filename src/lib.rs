@@ -75,6 +75,11 @@ impl<T: Adapter> Migrator<T> {
         Migrator { adapter: adapter, migrations: BTreeMap::new() }
     }
 
+    /// Get a reference to the adapter.
+    pub fn adapter(&self) -> &T {
+        &self.adapter
+    }
+
     /// Register a migration. If a migration with the same version is already registered, a warning
     /// is logged and the registration fails.
     pub fn register(&mut self, migration: Box<T::MigrationType>) {
