@@ -138,9 +138,8 @@ impl<T: Adapter> Migrator<T> {
     /// Panics if there is an underlying problem reverting any of the matched migrations.
     pub fn down(&self, to: Option<Version>) {
         let migrated_versions = self.migrated_versions();
-        let current_version = self.current_version();
-        let source = match current_version {
-            Some(ref version) => Bound::Included(version),
+        let source = match migrated_versions.iter().last() {
+            Some(version) => Bound::Included(version),
             None => return
         };
         let destination = match to {
