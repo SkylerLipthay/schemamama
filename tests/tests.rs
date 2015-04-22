@@ -3,14 +3,19 @@ extern crate schemamama;
 
 use schemamama::{Adapter, Migration, Migrator, Version};
 use std::cell::RefCell;
+use std::collections::BTreeSet;
 
 struct DummyAdapter {
-    versions: RefCell<Vec<Version>>
+    versions: RefCell<BTreeSet<Version>>
 }
 
 impl DummyAdapter {
     pub fn new() -> DummyAdapter {
-        DummyAdapter { versions: RefCell::new(Vec::new()) }
+        DummyAdapter { versions: RefCell::new(BTreeSet::new()) }
+    }
+
+    pub fn is_migrated(&self, version: Version) -> bool {
+        self.versions.borrow().contains(&version)
     }
 }
 
@@ -18,16 +23,19 @@ impl Adapter for DummyAdapter {
     type MigrationType = Migration;
 
     fn current_version(&self) -> Option<Version> {
-        self.versions.borrow_mut().iter().last().map(|v| *v)
+        self.versions.borrow().iter().last().map(|v| *v)
+    }
+
+    fn migrated_versions(&self) -> BTreeSet<Version> {
+        self.versions.borrow().iter().cloned().collect()
     }
 
     fn apply_migration(&self, migration: &Migration) {
-        self.versions.borrow_mut().push(migration.version());
+        self.versions.borrow_mut().insert(migration.version());
     }
 
     fn revert_migration(&self, migration: &Migration) {
-        let mut versions = self.versions.borrow_mut();
-        versions.iter().position(|&v| v == migration.version()).map(|i| versions.remove(i));
+        self.versions.borrow_mut().remove(&migration.version());
     }
 }
 
@@ -48,11 +56,11 @@ fn test_registration() {
 }
 
 #[test]
-fn test_has_version() {
+fn test_version_registered() {
     let mut migrator = Migrator::new(DummyAdapter::new());
-    assert_eq!(migrator.has_version(10), false);
+    assert_eq!(migrator.version_registered(10), false);
     migrator.register(Box::new(FirstMigration));
-    assert_eq!(migrator.has_version(10), true);
+    assert_eq!(migrator.version_registered(10), true);
 }
 
 #[test]
@@ -67,4 +75,19 @@ fn test_migrate() {
     assert_eq!(migrator.current_version(), Some(10));
     migrator.down(None);
     assert_eq!(migrator.current_version(), None);
+}
+
+#[test]
+fn test_retroactive_migrations() {
+    let mut migrator = Migrator::new(DummyAdapter::new());
+    migrator.register(Box::new(SecondMigration));
+    migrator.up(20);
+    assert_eq!(migrator.current_version(), Some(20));
+    assert!(migrator.adapter().is_migrated(20));
+    assert!(!migrator.adapter().is_migrated(10));
+    migrator.register(Box::new(FirstMigration));
+    migrator.up(20);
+    assert_eq!(migrator.current_version(), Some(20));
+    assert!(migrator.adapter().is_migrated(20));
+    assert!(migrator.adapter().is_migrated(10));
 }

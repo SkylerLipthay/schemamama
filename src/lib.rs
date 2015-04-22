@@ -3,7 +3,7 @@
 #[macro_use]
 extern crate log;
 
-use std::collections::{BTreeMap, Bound};
+use std::collections::{BTreeMap, BTreeSet, Bound};
 
 /// The version type alias used to uniquely reference migrations.
 pub type Version = i64;
@@ -56,6 +56,10 @@ pub trait Adapter {
     /// panic if necessary.
     fn current_version(&self) -> Option<Version>;
 
+    /// Returns a set of the versions of all of the currently applied migrations. Can panic if
+    /// necessary.
+    fn migrated_versions(&self) -> BTreeSet<Version>;
+
     /// Applies the specified migration. Can panic if necessary.
     fn apply_migration(&self, migration: &Self::MigrationType);
 
@@ -84,7 +88,7 @@ impl<T: Adapter> Migrator<T> {
     /// is logged and the registration fails.
     pub fn register(&mut self, migration: Box<T::MigrationType>) {
         let version = migration.version();
-        if self.has_version(version) {
+        if self.version_registered(version) {
             warn!("Migration with version {:?} is already registered", version);
         } else {
             self.migrations.insert(version, migration);
@@ -92,7 +96,7 @@ impl<T: Adapter> Migrator<T> {
     }
 
     /// Returns true is a migration with the provided version has been registered.
-    pub fn has_version(&self, version: Version) -> bool {
+    pub fn version_registered(&self, version: Version) -> bool {
         self.migrations.contains_key(&version)
     }
 
@@ -117,6 +121,15 @@ impl<T: Adapter> Migrator<T> {
         self.adapter.current_version()
     }
 
+    /// Returns a set of the versions of all of the currently applied migrations.
+    ///
+    /// ## Panics
+    ///
+    /// Panics if there is an underlying problem retrieving the current versions from the adapter.
+    pub fn migrated_versions(&self) -> BTreeSet<Version> {
+        self.adapter.migrated_versions()
+    }
+
     /// Rollback to the specified version (exclusive), or rollback to the state before any
     /// registered migrations were applied if `None` is specified.
     ///
@@ -124,6 +137,7 @@ impl<T: Adapter> Migrator<T> {
     ///
     /// Panics if there is an underlying problem reverting any of the matched migrations.
     pub fn down(&self, to: Option<Version>) {
+        let migrated_versions = self.migrated_versions();
         let current_version = self.current_version();
         let source = match current_version {
             Some(ref version) => Bound::Included(version),
@@ -134,6 +148,10 @@ impl<T: Adapter> Migrator<T> {
             None => Bound::Unbounded
         };
         for (version, migration) in self.migrations.range(destination, source).rev() {
+            if !migrated_versions.contains(version) {
+                info!("Skipping migration {:?}: {}", version, migration.description());
+                continue;
+            }
             info!("Reverting migration {:?}: {}", version, migration.description());
             self.adapter.revert_migration(migration);
         }
@@ -145,13 +163,13 @@ impl<T: Adapter> Migrator<T> {
     ///
     /// Panics if there is an underlying problem applying any of the matched migrations.
     pub fn up(&self, to: Version) {
-        let current_version = self.current_version();
-        let source = match current_version {
-            Some(ref version) => Bound::Excluded(version),
-            None => Bound::Unbounded
-        };
+        let migrated_versions = self.migrated_versions();
         let destination = Bound::Included(&to);
-        for (version, migration) in self.migrations.range(source, destination) {
+        for (version, migration) in self.migrations.range(Bound::Unbounded, destination) {
+            if migrated_versions.contains(version) {
+                info!("Skipping migration {:?}: {}", version, migration.description());
+                continue;
+            }
             info!("Applying migration {:?}: {}", version, migration.description());
             self.adapter.apply_migration(migration);
         }
