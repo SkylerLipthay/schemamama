@@ -149,7 +149,6 @@ impl<T: Adapter> Migrator<T> {
         };
         for (version, migration) in self.migrations.range(destination, source).rev() {
             if !migrated_versions.contains(version) {
-                info!("Skipping migration {:?}: {}", version, migration.description());
                 continue;
             }
             info!("Reverting migration {:?}: {}", version, migration.description());
@@ -167,7 +166,6 @@ impl<T: Adapter> Migrator<T> {
         let destination = Bound::Included(&to);
         for (version, migration) in self.migrations.range(Bound::Unbounded, destination) {
             if migrated_versions.contains(version) {
-                info!("Skipping migration {:?}: {}", version, migration.description());
                 continue;
             }
             info!("Applying migration {:?}: {}", version, migration.description());
