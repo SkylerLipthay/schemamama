@@ -1,4 +1,4 @@
-#![feature(collections)]
+#![feature(btree_range, collections_bound)]
 
 #[macro_use]
 extern crate log;
