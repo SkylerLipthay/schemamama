@@ -1,6 +1,6 @@
 [package]
 name = "schemamama"
-version = "0.0.8"
+version = "0.0.9"
 authors = ["Skyler Lipthay <skyler.lipthay@gmail.com>"]
 description = "A lightweight database schema migration system"
 readme = "README.md"
