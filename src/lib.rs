@@ -141,11 +141,17 @@ impl<T: Adapter> Migrator<T> {
         };
 
         let migrated_versions = self.migrated_versions();
-        let targets = self.migrations.iter().rev().filter(|&(v, _)| within_range(*v, to, from));
+        let targets = self.migrations.iter()
+            // Rollback migrations from latest to oldest:
+            .rev()
+            // Rollback the current version, and all versions downwards until the specified version
+            // (exclusive):
+            .filter(|&(&v, _)| within_range(v, to, from))
+            // Rollback only the migrations that are actually already migrated (in the case that
+            // some intermediary migrations were never executed).
+            .filter(|&(v, _)| migrated_versions.contains(v));
+
         for (version, migration) in targets {
-            if !migrated_versions.contains(version) {
-                continue;
-            }
             info!("Reverting migration {:?}: {}", version, migration.description());
             self.adapter.revert_migration(migration);
         }
@@ -158,11 +164,14 @@ impl<T: Adapter> Migrator<T> {
     /// Panics if there is an underlying problem applying any of the matched migrations.
     pub fn up(&self, to: Version) {
         let migrated_versions = self.migrated_versions();
-        let targets = self.migrations.iter().filter(|&(v, _)| within_range(*v, None, to));
+        let targets = self.migrations.iter()
+            // Execute all versions upwards until the specified version (inclusive):
+            .filter(|&(&v, _)| within_range(v, None, to))
+            // Execute only the migrations that are actually not already migrated (in the case that
+            // some intermediary migrations were previously executed).
+            .filter(|&(v, _)| !migrated_versions.contains(v));
+
         for (version, migration) in targets {
-            if migrated_versions.contains(version) {
-                continue;
-            }
             info!("Applying migration {:?}: {}", version, migration.description());
             self.adapter.apply_migration(migration);
         }
