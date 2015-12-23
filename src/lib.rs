@@ -1,9 +1,7 @@
-#![feature(btree_range, collections_bound)]
-
 #[macro_use]
 extern crate log;
 
-use std::collections::{BTreeMap, BTreeSet, Bound};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The version type alias used to uniquely reference migrations.
 pub type Version = i64;
@@ -137,17 +135,14 @@ impl<T: Adapter> Migrator<T> {
     ///
     /// Panics if there is an underlying problem reverting any of the matched migrations.
     pub fn down(&self, to: Option<Version>) {
-        let current_version = self.current_version();
+        let from = match self.current_version() {
+            Some(version) => version,
+            None => return,
+        };
+
         let migrated_versions = self.migrated_versions();
-        let source = match current_version {
-            Some(ref version) => Bound::Included(version),
-            None => return
-        };
-        let destination = match to {
-            Some(ref version) => Bound::Excluded(version),
-            None => Bound::Unbounded
-        };
-        for (version, migration) in self.migrations.range(destination, source).rev() {
+        let targets = self.migrations.iter().rev().filter(|&(v, _)| within_range(*v, to, from));
+        for (version, migration) in targets {
             if !migrated_versions.contains(version) {
                 continue;
             }
@@ -163,8 +158,8 @@ impl<T: Adapter> Migrator<T> {
     /// Panics if there is an underlying problem applying any of the matched migrations.
     pub fn up(&self, to: Version) {
         let migrated_versions = self.migrated_versions();
-        let destination = Bound::Included(&to);
-        for (version, migration) in self.migrations.range(Bound::Unbounded, destination) {
+        let targets = self.migrations.iter().filter(|&(v, _)| within_range(*v, None, to));
+        for (version, migration) in targets {
             if migrated_versions.contains(version) {
                 continue;
             }
@@ -172,4 +167,31 @@ impl<T: Adapter> Migrator<T> {
             self.adapter.apply_migration(migration);
         }
     }
+}
+
+// Tests whether a `Version` is within a range defined by the exclusive `low` and the inclusive
+// `high` bounds.
+fn within_range(version: Version, low: Option<Version>, high: Version) -> bool {
+    // Inclusive upper bound:
+    if version > high {
+        return false;
+    }
+
+    // Exclusive lower bound:
+    match low {
+        Some(low) => version > low,
+        None => true,
+    }
+}
+
+#[test]
+fn test_within_range() {
+    assert!(within_range(0, None, 5));
+    assert!(within_range(5, None, 5));
+    assert!(!within_range(6, None, 5));
+    assert!(!within_range(1, Some(2), 5));
+    assert!(!within_range(2, Some(2), 5));
+    assert!(within_range(3, Some(2), 5));
+    assert!(within_range(5, Some(2), 5));
+    assert!(!within_range(6, Some(2), 5));
 }
