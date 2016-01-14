@@ -50,19 +50,20 @@ pub trait Adapter {
     /// will declare functions that the adapter will use to migrate upwards and downwards.
     type MigrationType: Migration + ?Sized;
 
-    /// Returns the latest migration version, or `None` if no migrations have been recorded. Can
-    /// panic if necessary.
-    fn current_version(&self) -> Option<Version>;
+    /// An adapter-specific error type that can be returned from any of this trait's methods.
+    type Error;
 
-    /// Returns a set of the versions of all of the currently applied migrations. Can panic if
-    /// necessary.
-    fn migrated_versions(&self) -> BTreeSet<Version>;
+    /// Returns the latest migration version, or `None` if no migrations have been recorded.
+    fn current_version(&self) -> Result<Option<Version>, Self::Error>;
 
-    /// Applies the specified migration. Can panic if necessary.
-    fn apply_migration(&self, migration: &Self::MigrationType);
+    /// Returns a set of the versions of all of the currently applied migrations.
+    fn migrated_versions(&self) -> Result<BTreeSet<Version>, Self::Error>;
 
-    /// Reverts the specified migration. Can panic if necessary.
-    fn revert_migration(&self, migration: &Self::MigrationType);
+    /// Applies the specified migration.
+    fn apply_migration(&self, migration: &Self::MigrationType) -> Result<(), Self::Error>;
+
+    /// Reverts the specified migration.
+    fn revert_migration(&self, migration: &Self::MigrationType) -> Result<(), Self::Error>;
 }
 
 /// Maintains an ordered collection of migrations to utilize.
@@ -116,36 +117,24 @@ impl<T: Adapter> Migrator<T> {
     }
 
     /// Returns the latest migration version, or `None` if no migrations have been recorded.
-    ///
-    /// ## Panics
-    ///
-    /// Panics if there is an underlying problem retrieving the current version from the adapter.
-    pub fn current_version(&self) -> Option<Version> {
+    pub fn current_version(&self) -> Result<Option<Version>, T::Error> {
         self.adapter.current_version()
     }
 
     /// Returns a set of the versions of all of the currently applied migrations.
-    ///
-    /// ## Panics
-    ///
-    /// Panics if there is an underlying problem retrieving the current versions from the adapter.
-    pub fn migrated_versions(&self) -> BTreeSet<Version> {
+    pub fn migrated_versions(&self) -> Result<BTreeSet<Version>, T::Error> {
         self.adapter.migrated_versions()
     }
 
     /// Rollback to the specified version (exclusive), or rollback to the state before any
     /// registered migrations were applied if `None` is specified.
-    ///
-    /// ## Panics
-    ///
-    /// Panics if there is an underlying problem reverting any of the matched migrations.
-    pub fn down(&self, to: Option<Version>) {
-        let from = match self.current_version() {
+    pub fn down(&self, to: Option<Version>) -> Result<(), T::Error> {
+        let from = match try!(self.current_version()) {
             Some(version) => version,
-            None => return,
+            None => return Ok(()),
         };
 
-        let migrated_versions = self.migrated_versions();
+        let migrated_versions = try!(self.migrated_versions());
         let targets = self.migrations.iter()
             // Rollback migrations from latest to oldest:
             .rev()
@@ -158,17 +147,15 @@ impl<T: Adapter> Migrator<T> {
 
         for (version, migration) in targets {
             info!("Reverting migration {:?}: {}", version, migration.description());
-            self.adapter.revert_migration(migration);
+            try!(self.adapter.revert_migration(migration));
         }
+
+        Ok(())
     }
 
     /// Migrate to the specified version (inclusive).
-    ///
-    /// ## Panics
-    ///
-    /// Panics if there is an underlying problem applying any of the matched migrations.
-    pub fn up(&self, to: Version) {
-        let migrated_versions = self.migrated_versions();
+    pub fn up(&self, to: Version) -> Result<(), T::Error> {
+        let migrated_versions = try!(self.migrated_versions());
         let targets = self.migrations.iter()
             // Execute all versions upwards until the specified version (inclusive):
             .filter(|&(&v, _)| within_range(v, None, to))
@@ -178,8 +165,10 @@ impl<T: Adapter> Migrator<T> {
 
         for (version, migration) in targets {
             info!("Applying migration {:?}: {}", version, migration.description());
-            self.adapter.apply_migration(migration);
+            try!(self.adapter.apply_migration(migration));
         }
+
+        Ok(())
     }
 }
 

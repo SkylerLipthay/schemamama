@@ -21,21 +21,24 @@ impl DummyAdapter {
 
 impl Adapter for DummyAdapter {
     type MigrationType = Migration;
+    type Error = ();
 
-    fn current_version(&self) -> Option<Version> {
-        self.versions.borrow().iter().last().map(|v| *v)
+    fn current_version(&self) -> Result<Option<Version>, ()> {
+        Ok(self.versions.borrow().iter().last().map(|v| *v))
     }
 
-    fn migrated_versions(&self) -> BTreeSet<Version> {
-        self.versions.borrow().iter().cloned().collect()
+    fn migrated_versions(&self) -> Result<BTreeSet<Version>, ()> {
+        Ok(self.versions.borrow().iter().cloned().collect())
     }
 
-    fn apply_migration(&self, migration: &Migration) {
+    fn apply_migration(&self, migration: &Migration) -> Result<(), ()> {
         self.versions.borrow_mut().insert(migration.version());
+        Ok(())
     }
 
-    fn revert_migration(&self, migration: &Migration) {
+    fn revert_migration(&self, migration: &Migration) -> Result<(), ()> {
         self.versions.borrow_mut().remove(&migration.version());
+        Ok(())
     }
 }
 
@@ -72,26 +75,26 @@ fn test_migrate() {
     let mut migrator = Migrator::new(DummyAdapter::new());
     migrator.register(Box::new(FirstMigration));
     migrator.register(Box::new(SecondMigration));
-    assert_eq!(migrator.current_version(), None);
-    migrator.up(20);
-    assert_eq!(migrator.current_version(), Some(20));
-    migrator.down(Some(10));
-    assert_eq!(migrator.current_version(), Some(10));
-    migrator.down(None);
-    assert_eq!(migrator.current_version(), None);
+    assert_eq!(migrator.current_version().unwrap(), None);
+    migrator.up(20).unwrap();
+    assert_eq!(migrator.current_version().unwrap(), Some(20));
+    migrator.down(Some(10)).unwrap();
+    assert_eq!(migrator.current_version().unwrap(), Some(10));
+    migrator.down(None).unwrap();
+    assert_eq!(migrator.current_version().unwrap(), None);
 }
 
 #[test]
 fn test_retroactive_migrations() {
     let mut migrator = Migrator::new(DummyAdapter::new());
     migrator.register(Box::new(SecondMigration));
-    migrator.up(20);
-    assert_eq!(migrator.current_version(), Some(20));
+    migrator.up(20).unwrap();
+    assert_eq!(migrator.current_version().unwrap(), Some(20));
     assert!(migrator.adapter().is_migrated(20));
     assert!(!migrator.adapter().is_migrated(10));
     migrator.register(Box::new(FirstMigration));
-    migrator.up(20);
-    assert_eq!(migrator.current_version(), Some(20));
+    migrator.up(20).unwrap();
+    assert_eq!(migrator.current_version().unwrap(), Some(20));
     assert!(migrator.adapter().is_migrated(20));
     assert!(migrator.adapter().is_migrated(10));
 }
