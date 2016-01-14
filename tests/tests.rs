@@ -53,6 +53,10 @@ fn test_registration() {
     migrator.register(Box::new(FirstMigration));
     assert_eq!(migrator.first_version(), Some(10));
     assert_eq!(migrator.last_version(), Some(20));
+    let mut versions = BTreeSet::new();
+    versions.insert(10);
+    versions.insert(20);
+    assert_eq!(migrator.registered_versions(), versions);
 }
 
 #[test]

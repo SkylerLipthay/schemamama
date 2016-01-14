@@ -98,6 +98,11 @@ impl<T: Adapter> Migrator<T> {
         self.migrations.contains_key(&version)
     }
 
+    /// Returns the set of all registered migration versions.
+    pub fn registered_versions(&self) -> BTreeSet<Version> {
+        self.migrations.keys().cloned().collect()
+    }
+
     /// Returns the lowest version of the registered migrations, or `None` if no migrations have
     /// been registered.
     pub fn first_version(&self) -> Option<Version> {
