@@ -10,7 +10,7 @@ If you're using Cargo, just add Schemamama to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-schemamama = "0.0.11"
+schemamama = "0.1"
 ```
 
 ## Adapters
