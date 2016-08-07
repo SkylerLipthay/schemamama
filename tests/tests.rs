@@ -76,24 +76,26 @@ fn test_migrate() {
     migrator.register(Box::new(FirstMigration));
     migrator.register(Box::new(SecondMigration));
     assert_eq!(migrator.current_version().unwrap(), None);
-    migrator.up(20).unwrap();
+    migrator.up(Some(20)).unwrap();
     assert_eq!(migrator.current_version().unwrap(), Some(20));
     migrator.down(Some(10)).unwrap();
     assert_eq!(migrator.current_version().unwrap(), Some(10));
     migrator.down(None).unwrap();
     assert_eq!(migrator.current_version().unwrap(), None);
+    migrator.up(None).unwrap();
+    assert_eq!(migrator.current_version().unwrap(), Some(20));
 }
 
 #[test]
 fn test_retroactive_migrations() {
     let mut migrator = Migrator::new(DummyAdapter::new());
     migrator.register(Box::new(SecondMigration));
-    migrator.up(20).unwrap();
+    migrator.up(Some(20)).unwrap();
     assert_eq!(migrator.current_version().unwrap(), Some(20));
     assert!(migrator.adapter().is_migrated(20));
     assert!(!migrator.adapter().is_migrated(10));
     migrator.register(Box::new(FirstMigration));
-    migrator.up(20).unwrap();
+    migrator.up(Some(20)).unwrap();
     assert_eq!(migrator.current_version().unwrap(), Some(20));
     assert!(migrator.adapter().is_migrated(20));
     assert!(migrator.adapter().is_migrated(10));
