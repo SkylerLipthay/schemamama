@@ -129,10 +129,8 @@ impl<T: Adapter> Migrator<T> {
     /// Rollback to the specified version (exclusive), or rollback to the state before any
     /// registered migrations were applied if `None` is specified.
     pub fn down(&self, to: Option<Version>) -> Result<(), T::Error> {
-        let from = match try!(self.current_version()) {
-            Some(version) => version,
-            None => return Ok(()),
-        };
+        let from = try!(self.current_version());
+        if from.is_none() { return Ok(()); }
 
         let migrated_versions = try!(self.migrated_versions());
         let targets = self.migrations.iter()
@@ -154,7 +152,7 @@ impl<T: Adapter> Migrator<T> {
     }
 
     /// Migrate to the specified version (inclusive).
-    pub fn up(&self, to: Version) -> Result<(), T::Error> {
+    pub fn up(&self, to: Option<Version>) -> Result<(), T::Error> {
         let migrated_versions = try!(self.migrated_versions());
         let targets = self.migrations.iter()
             // Execute all versions upwards until the specified version (inclusive):
@@ -174,27 +172,38 @@ impl<T: Adapter> Migrator<T> {
 
 // Tests whether a `Version` is within a range defined by the exclusive `low` and the inclusive
 // `high` bounds.
-fn within_range(version: Version, low: Option<Version>, high: Version) -> bool {
-    // Inclusive upper bound:
-    if version > high {
-        return false;
-    }
-
-    // Exclusive lower bound:
-    match low {
-        Some(low) => version > low,
-        None => true,
+fn within_range(version: Version, low: Option<Version>, high: Option<Version>) -> bool {
+    match (low, high) {
+        (None, None)            => true,
+        (Some(low), Some(high)) => version > low && version <= high,
+        (Some(low), None)       => version > low,
+        (None, Some(high))      => version <= high
     }
 }
 
 #[test]
 fn test_within_range() {
-    assert!(within_range(0, None, 5));
-    assert!(within_range(5, None, 5));
-    assert!(!within_range(6, None, 5));
-    assert!(!within_range(1, Some(2), 5));
-    assert!(!within_range(2, Some(2), 5));
-    assert!(within_range(3, Some(2), 5));
-    assert!(within_range(5, Some(2), 5));
-    assert!(!within_range(6, Some(2), 5));
+    // no lower or upper bound
+    assert!(within_range(0, None, None));
+    assert!(within_range(42, None, None));
+    assert!(within_range(100000, None, None));
+
+    // both lower and upper bounds
+    assert!(!within_range(1, Some(2), Some(5)));
+    assert!(!within_range(2, Some(2), Some(5)));
+    assert!(within_range(3, Some(2), Some(5)));
+    assert!(within_range(5, Some(2), Some(5)));
+    assert!(!within_range(6, Some(2), Some(5)));
+
+    // lower bound only
+    assert!(!within_range(0, Some(5), None));
+    assert!(!within_range(4, Some(5), None));
+    assert!(!within_range(5, Some(5), None));
+    assert!(within_range(6, Some(5), None));
+    assert!(within_range(60, Some(5), None));
+
+    // upper bound only
+    assert!(within_range(0, None, Some(5)));
+    assert!(within_range(5, None, Some(5)));
+    assert!(!within_range(6, None, Some(5)));
 }
