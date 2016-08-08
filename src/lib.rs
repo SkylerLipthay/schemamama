@@ -130,7 +130,9 @@ impl<T: Adapter> Migrator<T> {
     /// registered migrations were applied if `None` is specified.
     pub fn down(&self, to: Option<Version>) -> Result<(), T::Error> {
         let from = try!(self.current_version());
-        if from.is_none() { return Ok(()); }
+        if from.is_none() {
+            return Ok(());
+        }
 
         let migrated_versions = try!(self.migrated_versions());
         let targets = self.migrations.iter()
@@ -174,10 +176,10 @@ impl<T: Adapter> Migrator<T> {
 // `high` bounds.
 fn within_range(version: Version, low: Option<Version>, high: Option<Version>) -> bool {
     match (low, high) {
-        (None, None)            => true,
+        (None, None) => true,
+        (Some(low), None) => version > low,
+        (None, Some(high)) => version <= high,
         (Some(low), Some(high)) => version > low && version <= high,
-        (Some(low), None)       => version > low,
-        (None, Some(high))      => version <= high
     }
 }
 
