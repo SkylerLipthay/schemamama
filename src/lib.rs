@@ -17,6 +17,32 @@ pub trait Migration {
     fn description(&self) -> &'static str;
 }
 
+/// A migration's direction.
+#[derive(Debug)]
+pub enum Direction {
+    Down,
+    Up,
+}
+
+/// An all-encompassing error type that can be returned during interaction with the migrator
+/// adapter.
+#[derive(Debug)]
+pub enum Error<E> {
+    /// A generic error that occurred while interacting with the adapter.
+    Adapter(E),
+    /// An error that arose from the adapter specifically during a migration's execution.
+    Migration {
+        /// The version of the migration that failed.
+        version: Version,
+        /// The description of the migration that failed.
+        description: &'static str,
+        /// The direction in which the failed migration was ran.
+        direction: Direction,
+        /// The underlying error from the adapter.
+        error: E,
+    }
+}
+
 /// Efficiently implement the `Migration` trait for a given type.
 ///
 /// ## Example
@@ -117,18 +143,24 @@ impl<T: Adapter> Migrator<T> {
     }
 
     /// Returns the latest migration version, or `None` if no migrations have been recorded.
-    pub fn current_version(&self) -> Result<Option<Version>, T::Error> {
-        self.adapter.current_version()
+    pub fn current_version(&self) -> Result<Option<Version>, Error<T::Error>> {
+        match self.adapter.current_version() {
+            Ok(ver) => Ok(ver),
+            Err(err) => Err(Error::Adapter(err)),
+        }
     }
 
     /// Returns a set of the versions of all of the currently applied migrations.
-    pub fn migrated_versions(&self) -> Result<BTreeSet<Version>, T::Error> {
-        self.adapter.migrated_versions()
+    pub fn migrated_versions(&self) -> Result<BTreeSet<Version>, Error<T::Error>> {
+        match self.adapter.migrated_versions() {
+            Ok(vers) => Ok(vers),
+            Err(err) => Err(Error::Adapter(err)),
+        }
     }
 
     /// Rollback to the specified version (exclusive), or rollback to the state before any
     /// registered migrations were applied if `None` is specified.
-    pub fn down(&self, to: Option<Version>) -> Result<(), T::Error> {
+    pub fn down(&self, to: Option<Version>) -> Result<(), Error<T::Error>> {
         let from = try!(self.current_version());
         if from.is_none() {
             return Ok(());
@@ -145,16 +177,23 @@ impl<T: Adapter> Migrator<T> {
             // some intermediary migrations were never executed).
             .filter(|&(v, _)| migrated_versions.contains(v));
 
-        for (version, migration) in targets {
+        for (&version, migration) in targets {
             info!("Reverting migration {:?}: {}", version, migration.description());
-            try!(self.adapter.revert_migration(migration));
+            if let Err(err) = self.adapter.revert_migration(migration) {
+                return Err(Error::Migration {
+                    version: version,
+                    description: migration.description(),
+                    direction: Direction::Down,
+                    error: err,
+                });
+            }
         }
 
         Ok(())
     }
 
     /// Migrate to the specified version (inclusive).
-    pub fn up(&self, to: Option<Version>) -> Result<(), T::Error> {
+    pub fn up(&self, to: Option<Version>) -> Result<(), Error<T::Error>> {
         let migrated_versions = try!(self.migrated_versions());
         let targets = self.migrations.iter()
             // Execute all versions upwards until the specified version (inclusive):
@@ -163,9 +202,16 @@ impl<T: Adapter> Migrator<T> {
             // some intermediary migrations were previously executed).
             .filter(|&(v, _)| !migrated_versions.contains(v));
 
-        for (version, migration) in targets {
+        for (&version, migration) in targets {
             info!("Applying migration {:?}: {}", version, migration.description());
-            try!(self.adapter.apply_migration(migration));
+            if let Err(err) = self.adapter.apply_migration(migration) {
+                return Err(Error::Migration {
+                    version: version,
+                    description: migration.description(),
+                    direction: Direction::Up,
+                    error: err,
+                });
+            }
         }
 
         Ok(())
