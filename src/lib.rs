@@ -2,6 +2,7 @@
 extern crate log;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::{Display, Formatter};
 
 /// The version type alias used to uniquely reference migrations.
 pub type Version = i64;
@@ -40,6 +41,31 @@ pub enum Error<E> {
         direction: Direction,
         /// The underlying error from the adapter.
         error: E,
+    }
+}
+
+impl<E: std::error::Error> std::error::Error for Error<E> {
+    fn description(&self) -> &str {
+        match *self {
+            Error::Adapter(ref err) => err.description(),
+            Error::Migration{version: _, description: _, direction: _, ref error} => error.description(),
+        }
+    }
+
+    fn cause(&self) -> Option<&std::error::Error> {
+        match *self {
+            Error::Adapter(ref err) => Some(err),
+            Error::Migration{version: _, description: _, direction: _, ref error} => Some(error),
+        }
+    }
+}
+
+impl<E: std::error::Error> Display for Error<E> {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), std::fmt::Error> {
+        match *self {
+            Error::Adapter(ref err) => write!(f, "Adataper error: {}", err),
+            Error::Migration{version: _, ref description, direction: _, ref error} => write!(f, "Error running migration {}, error: {}", description, error),
+        }
     }
 }
 
