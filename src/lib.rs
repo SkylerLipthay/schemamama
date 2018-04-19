@@ -16,7 +16,7 @@ pub trait Migration {
     fn version(&self) -> Version;
 
     /// A message describing the effects of this migration.
-    fn description(&self) -> &'static str;
+    fn description(&self) -> String;
 }
 
 /// A migration's direction.
@@ -37,7 +37,7 @@ pub enum Error<E> {
         /// The version of the migration that failed.
         version: Version,
         /// The description of the migration that failed.
-        description: &'static str,
+        description: String,
         /// The direction in which the failed migration was ran.
         direction: Direction,
         /// The underlying error from the adapter.
@@ -94,7 +94,7 @@ macro_rules! migration {
     ($ty:ident, $version:expr, $description:expr) => {
         impl $crate::Migration for $ty {
             fn version(&self) -> $crate::Version { $version }
-            fn description(&self) -> &'static str { $description }
+            fn description(&self) -> String { $description.into() }
         }
     }
 }
@@ -207,11 +207,12 @@ impl<T: Adapter> Migrator<T> {
             .filter(|&(v, _)| migrated_versions.contains(v));
 
         for (&version, migration) in targets {
-            info!("Reverting migration {:?}: {}", version, migration.description());
+            let description = migration.description();
+            info!("Reverting migration {:?}: {}", version, description);
             if let Err(err) = self.adapter.revert_migration(migration) {
                 return Err(Error::Migration {
                     version: version,
-                    description: migration.description(),
+                    description: description,
                     direction: Direction::Down,
                     error: err,
                 });
@@ -232,11 +233,12 @@ impl<T: Adapter> Migrator<T> {
             .filter(|&(v, _)| !migrated_versions.contains(v));
 
         for (&version, migration) in targets {
-            info!("Applying migration {:?}: {}", version, migration.description());
+            let description = migration.description();
+            info!("Applying migration {:?}: {}", version, description);
             if let Err(err) = self.adapter.apply_migration(migration) {
                 return Err(Error::Migration {
                     version: version,
-                    description: migration.description(),
+                    description: description,
                     direction: Direction::Up,
                     error: err,
                 });
