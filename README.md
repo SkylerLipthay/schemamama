@@ -8,7 +8,7 @@ If you're using Cargo, just add Schemamama to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-schemamama = "0.2"
+schemamama = "0.3"
 ```
 
 ## Adapters
