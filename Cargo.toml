@@ -9,4 +9,4 @@ license = "MIT"
 repository = "https://github.com/SkylerLipthay/schemamama"
 
 [dependencies]
-log = "0.3"
+log = "0.4"
