@@ -23,20 +23,20 @@ impl Adapter for DummyAdapter {
     type MigrationType = Migration;
     type Error = ();
 
-    fn current_version(&self) -> Result<Option<Version>, ()> {
+    fn current_version(&mut self) -> Result<Option<Version>, ()> {
         Ok(self.versions.borrow().iter().last().map(|v| *v))
     }
 
-    fn migrated_versions(&self) -> Result<BTreeSet<Version>, ()> {
+    fn migrated_versions(&mut self) -> Result<BTreeSet<Version>, ()> {
         Ok(self.versions.borrow().iter().cloned().collect())
     }
 
-    fn apply_migration(&self, migration: &Migration) -> Result<(), ()> {
+    fn apply_migration(&mut self, migration: &Migration) -> Result<(), ()> {
         self.versions.borrow_mut().insert(migration.version());
         Ok(())
     }
 
-    fn revert_migration(&self, migration: &Migration) -> Result<(), ()> {
+    fn revert_migration(&mut self, migration: &Migration) -> Result<(), ()> {
         self.versions.borrow_mut().remove(&migration.version());
         Ok(())
     }

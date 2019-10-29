@@ -109,16 +109,16 @@ pub trait Adapter {
     type Error;
 
     /// Returns the latest migration version, or `None` if no migrations have been recorded.
-    fn current_version(&self) -> Result<Option<Version>, Self::Error>;
+    fn current_version(&mut self) -> Result<Option<Version>, Self::Error>;
 
     /// Returns a set of the versions of all of the currently applied migrations.
-    fn migrated_versions(&self) -> Result<BTreeSet<Version>, Self::Error>;
+    fn migrated_versions(&mut self) -> Result<BTreeSet<Version>, Self::Error>;
 
     /// Applies the specified migration.
-    fn apply_migration(&self, migration: &Self::MigrationType) -> Result<(), Self::Error>;
+    fn apply_migration(&mut self, migration: &Self::MigrationType) -> Result<(), Self::Error>;
 
     /// Reverts the specified migration.
-    fn revert_migration(&self, migration: &Self::MigrationType) -> Result<(), Self::Error>;
+    fn revert_migration(&mut self, migration: &Self::MigrationType) -> Result<(), Self::Error>;
 }
 
 /// Maintains an ordered collection of migrations to utilize.
@@ -172,7 +172,7 @@ impl<T: Adapter> Migrator<T> {
     }
 
     /// Returns the latest migration version, or `None` if no migrations have been recorded.
-    pub fn current_version(&self) -> Result<Option<Version>, Error<T::Error>> {
+    pub fn current_version(&mut self) -> Result<Option<Version>, Error<T::Error>> {
         match self.adapter.current_version() {
             Ok(ver) => Ok(ver),
             Err(err) => Err(Error::Adapter(err)),
@@ -180,7 +180,7 @@ impl<T: Adapter> Migrator<T> {
     }
 
     /// Returns a set of the versions of all of the currently applied migrations.
-    pub fn migrated_versions(&self) -> Result<BTreeSet<Version>, Error<T::Error>> {
+    pub fn migrated_versions(&mut self) -> Result<BTreeSet<Version>, Error<T::Error>> {
         match self.adapter.migrated_versions() {
             Ok(vers) => Ok(vers),
             Err(err) => Err(Error::Adapter(err)),
@@ -189,7 +189,7 @@ impl<T: Adapter> Migrator<T> {
 
     /// Rollback to the specified version (exclusive), or rollback to the state before any
     /// registered migrations were applied if `None` is specified.
-    pub fn down(&self, to: Option<Version>) -> Result<(), Error<T::Error>> {
+    pub fn down(&mut self, to: Option<Version>) -> Result<(), Error<T::Error>> {
         let from = try!(self.current_version());
         if from.is_none() {
             return Ok(());
@@ -223,7 +223,7 @@ impl<T: Adapter> Migrator<T> {
     }
 
     /// Migrate to the specified version (inclusive).
-    pub fn up(&self, to: Option<Version>) -> Result<(), Error<T::Error>> {
+    pub fn up(&mut self, to: Option<Version>) -> Result<(), Error<T::Error>> {
         let migrated_versions = try!(self.migrated_versions());
         let targets = self.migrations.iter()
             // Execute all versions upwards until the specified version (inclusive):
